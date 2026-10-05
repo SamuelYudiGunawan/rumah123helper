@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HEPI Rumah123 Helper
 // @namespace    https://hepi.local/userscripts
-// @version      1.5.2
+// @version      1.5.3
 // @description  Bantu mengisi listing Rumah123 melalui DOM/UI. Tidak pernah menyimpan atau menerbitkan iklan.
 // @updateURL    https://raw.githubusercontent.com/SamuelYudiGunawan/rumah123helper/master/hepi-rumah123-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/SamuelYudiGunawan/rumah123helper/master/hepi-rumah123-helper.user.js
@@ -14,7 +14,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.5.2';
+  const VERSION = '1.5.3';
 
   const CONFIG = {
     storageKey: 'hepi_r123_helper',
@@ -755,6 +755,12 @@
     const amount = Number(value);
     if (!Number.isFinite(amount)) return String(value == null ? '' : value).replace(/\./g, ',');
     return amount.toLocaleString('id-ID', { maximumFractionDigits: 12 });
+  }
+
+  function formatPriceInput(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return String(value == null ? '' : value).replace(/\./g, ',');
+    return amount.toLocaleString('id-ID', { useGrouping: false, maximumFractionDigits: 12 });
   }
 
   function detectPropertyType(text) {
@@ -1913,9 +1919,13 @@
     const priceBox = queryVisible('[data-testid="price"]');
     const priceInput = queryVisible('[data-testid="price"] input[name="price"]') || queryVisible('input[name="price"]');
     if (data.price != null && data.price !== '') {
-      const ok = priceInput ? setReactInput(priceInput, data.price) : false;
-      result('price', data.price, ok, ok ? '' : 'Input harga tidak ditemukan.', true);
-      if (ok) log('Setting price ' + data.price + ' ' + (data.priceUnit || ''));
+      const numericPrice = Number(data.price);
+      const inputValue = priceInput && priceInput.type === 'number' ? String(numericPrice) : formatPriceInput(numericPrice);
+      const setOk = priceInput ? setReactInput(priceInput, inputValue) : false;
+      const enteredPrice = priceInput ? parseLocalizedNumber(priceInput.value, true) : null;
+      const ok = setOk && enteredPrice != null && Math.abs(enteredPrice - numericPrice) < 1e-9;
+      result('price', formatPriceInput(numericPrice), ok, ok ? '' : 'Input harga tidak ditemukan atau nilainya tidak terverifikasi.', true);
+      if (ok) log('Setting price ' + formatPriceInput(numericPrice) + ' ' + (data.priceUnit || ''));
     }
     if (data.priceUnit && priceBox) {
       const unitSelect = priceBox.querySelector('select');
@@ -2067,7 +2077,7 @@
             <label class="field">Sumber Air<select id="q-waterSource">${CONFIG.waterSources.map(([value, label]) => '<option value="' + value + '">' + label + '</option>').join('')}</select></label>
             <details open><summary>Fasilitas Rumah</summary><div class="section" id="room-facilities"></div></details>
             <details open><summary>Fasilitas Perumahan</summary><div class="section" id="residential-facilities"></div></details>
-            <div class="row"><label class="field">Harga<input type="number" step="any" id="q-price"></label><label class="field">Satuan harga<select id="q-priceUnit"><option value="">(tidak diubah)</option><option>Ribu</option><option>Juta</option><option>Miliar</option><option>Triliun</option></select></label></div>
+            <div class="row"><label class="field">Harga<input type="text" inputmode="decimal" id="q-price" placeholder="Contoh: 1,8"></label><label class="field">Satuan harga<select id="q-priceUnit"><option value="">(tidak diubah)</option><option>Ribu</option><option>Juta</option><option>Miliar</option><option>Triliun</option></select></label></div>
             <label class="check"><input type="checkbox" id="q-negotiable"> Bisa Nego</label><label class="check"><input type="checkbox" id="q-coBroke"> Co-broke</label>
             <label class="field">Judul iklan<input type="text" id="q-title"></label>
             <label class="field">Deskripsi asli (opsional)</label><textarea class="small" id="original-description" placeholder="Isi deskripsi asli tanpa highlight"></textarea>
@@ -2098,7 +2108,11 @@
     byId('original-description').value = state.settings.originalDescription || '';
     const data = resolveData();
     const fields = ['propertyType', 'listingType', 'propertyStatus', 'locationQuery', 'street', 'certificate', 'landArea', 'buildingArea', 'electricity', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'floors', 'garage', 'carport', 'furnishing', 'condition', 'direction', 'price', 'priceUnit', 'title'];
-    fields.forEach((field) => { const control = byId('q-' + field); if (control) control.value = data[field] == null ? '' : data[field]; });
+    fields.forEach((field) => {
+      const control = byId('q-' + field);
+      if (!control) return;
+      control.value = data[field] == null ? '' : field === 'price' ? formatPriceInput(data[field]) : data[field];
+    });
     byId('q-negotiable').checked = Boolean(data.negotiable);
     byId('q-coBroke').checked = Boolean(data.coBroke);
     byId('q-waterSource').value = data.waterSource || '';
@@ -2155,9 +2169,19 @@
       log('Local state dibersihkan. Field listing pada halaman tidak dihapus.');
     });
     const map = { 'q-propertyType': 'propertyType', 'q-listingType': 'listingType', 'q-propertyStatus': 'propertyStatus', 'q-locationQuery': 'locationQuery', 'q-street': 'street', 'q-certificate': 'certificate', 'q-landArea': 'landArea', 'q-buildingArea': 'buildingArea', 'q-electricity': 'electricity', 'q-bedrooms': 'bedrooms', 'q-helperBedrooms': 'helperBedrooms', 'q-bathrooms': 'bathrooms', 'q-helperBathrooms': 'helperBathrooms', 'q-floors': 'floors', 'q-garage': 'garage', 'q-carport': 'carport', 'q-furnishing': 'furnishing', 'q-condition': 'condition', 'q-direction': 'direction', 'q-price': 'price', 'q-priceUnit': 'priceUnit', 'q-title': 'title' };
-    Object.keys(map).forEach((id) => byId(id).addEventListener('input', () => {
-      let value = byId(id).value;
-      if (['landArea', 'buildingArea', 'electricity', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'floors', 'garage', 'carport', 'price'].includes(map[id]) && value !== '') value = Number(value);
+    Object.keys(map).forEach((id) => byId(id).addEventListener(id === 'q-price' ? 'change' : 'input', () => {
+      const control = byId(id);
+      let value = control.value;
+      if (map[id] === 'price') {
+        const parsedPrice = value === '' ? null : parseLocalizedNumber(value, true);
+        if (value !== '' && parsedPrice == null) {
+          control.setCustomValidity('Masukkan harga dengan angka, misalnya 1,8.');
+          return;
+        }
+        control.setCustomValidity('');
+        value = parsedPrice == null ? '' : parsedPrice;
+        control.value = parsedPrice == null ? '' : formatPriceInput(parsedPrice);
+      } else if (['landArea', 'buildingArea', 'electricity', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'floors', 'garage', 'carport'].includes(map[id]) && value !== '') value = Number(value);
       state.manualOverrides[map[id]] = value;
       saveState();
       updatePanel();
