@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HEPI Rumah123 Helper
 // @namespace    https://hepi.local/userscripts
-// @version      1.5.3
+// @version      1.8.0
 // @description  Bantu mengisi listing Rumah123 melalui DOM/UI. Tidak pernah menyimpan atau menerbitkan iklan.
 // @updateURL    https://raw.githubusercontent.com/SamuelYudiGunawan/rumah123helper/master/hepi-rumah123-helper.user.js
 // @downloadURL  https://raw.githubusercontent.com/SamuelYudiGunawan/rumah123helper/master/hepi-rumah123-helper.user.js
@@ -14,7 +14,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.5.3';
+  const VERSION = '1.8.0';
 
   const CONFIG = {
     storageKey: 'hepi_r123_helper',
@@ -28,6 +28,12 @@
     moreUSP: ['Cicilan Bertahap', 'Free Biaya Notaris', 'Over Kredit', 'Dekat Taman Kota', 'Dekat Landmark', 'Dekat Tempat Wisata', 'Dekat Tempat Ibadah', 'Subsidi Angsuran', 'Syariah', 'Take Over', 'Lingkungan Islami', 'Dekat Akses KRL', 'Dekat Akses Transjakarta', 'Dekat Akses Bus Kota', 'Dekat Akses MRT', 'Dekat Akses LRT'],
     highlights: ['Dekat Simpang Lima', 'Dekat UNDIP', 'Dekat UNNES', 'Dekat Bandara Ahmad Yani', 'Dekat Kota Lama'],
     roomFacilities: ['Tempat Jemuran', 'Jalur Telepon', 'Kolam Renang', 'CCTV', 'Taman', 'AC', 'Kolam Ikan', 'Backyard', 'Teras', 'Tempat Cuci'],
+    rukoFacilities: ['AC', 'Jalur Telepon', 'CCTV', 'WIFI/Internet', 'Rooftop', 'Parking Area'],
+    warehouseFacilities: ['AC', 'Jalur Telepon', 'CCTV', 'WIFI/Internet', 'Mess Karyawan', 'Kantin Karyawan', 'Meeting Room', 'Mushola', 'Keamanan', 'Elevator/Lift', 'Genset', 'Loading Dock', 'Akses Fusso', 'Akses Engkel Box', 'Parking Area'],
+    kostRoomFacilities: ['Air Jernih', 'Kasur', 'Cermin', 'Lemari Baju', 'Meja', 'TV', 'Kloset Duduk', 'Kloset Jongkok', 'Shower', 'AC', 'Water Heater', 'Cable TV / Pay TV', 'Wifi / Internet'],
+    kostFacilities: ['Kamar Mandi Luar', 'Tempat Jemuran', 'Wifi / Internet', 'Water Heater', 'Tenaga Keamanan', 'Tenaga Kebersihan', 'Dapur', 'Microwave', 'Dispenser', 'Tempat Gym', 'Mesin Cuci', 'CCTV', 'Laundry', 'Kompor', 'Wastafel', 'Kulkas', 'Taman', 'Kolam Renang', 'Ruang Tamu', 'TV', 'Parking Area'],
+    rukoPaymentMethods: ['Kredit', 'Cash Keras', 'Cicilan Bertahap'],
+    kostPaymentMethods: ['KPR', 'Cash Keras', 'Cicilan Bertahap'],
     residentialFacilities: ['Keamanan 24 jam', 'Masjid', 'Akses Parkir', 'Taman', 'Kolam Renang', 'CCTV', 'One Gate System', 'Taman Bermain', 'Tempat Laundry', 'Jogging Track'],
     defaults: {
       roadWidth: 'TWO_CAR',
@@ -45,9 +51,15 @@
       ['INFILTRATION', 'Sumur Resapan'],
       ['EXCAVATION', 'Sumur Galian']
     ],
+    sceneries: [['URBAN', 'Perkotaan'], ['COUNTRY', 'Pedesaan'], ['MOUNTAINS', 'Pegunungan'], ['BEACH', 'Pantai'], ['CITY_PARK', 'Taman Kota'], ['RESIDENTIAL_AREAS', 'Pemukiman Warga']],
     roadWidths: [['', '?'], ['ONE_CAR', '1'], ['TWO_CAR', '2'], ['THREE_CAR', '3'], ['FOUR_CAR', '4']],
     preset: { propertyType: 'Rumah', listingType: 'Jual', propertyStatus: 'Second', province: 'Jawa Tengah', city: 'Semarang', certificate: 'Lainnya', condition: 'Bagus', furnishing: 'Unfurnished', coBroke: false }
   };
+
+  function defaultUSPsForType(propertyType) {
+    const defaults = CONFIG.defaults.selectedUSP.slice();
+    return normalizeText(propertyType) === 'tanah' ? defaults.filter((item) => item !== 'Siap Huni') : defaults;
+  }
 
   // Area names and city context are derived from the supplied data_area workbook.
   const LOCATION_DIRECTORY = [
@@ -560,7 +572,13 @@
       const restored = Object.assign(base, saved, { settings: Object.assign(base.settings, saved.settings || {}) });
       if (restored.parsedListing && Object.prototype.hasOwnProperty.call(restored.parsedListing, 'title')) delete restored.parsedListing.title;
       if (!Array.isArray(restored.selectedUSP)) restored.selectedUSP = CONFIG.defaults.selectedUSP.slice();
-      if (!restored.selectedUSPTouched) restored.selectedUSP = Array.from(new Set(CONFIG.defaults.selectedUSP.concat(restored.selectedUSP)));
+      if (!restored.selectedUSPTouched) {
+        const propertyType = restored.manualOverrides && restored.manualOverrides.propertyType
+          || restored.parsedListing && restored.parsedListing.propertyType
+          || (restored.preset === 'none' ? '' : CONFIG.preset.propertyType);
+        const typeDefaults = defaultUSPsForType(propertyType);
+        restored.selectedUSP = Array.from(new Set(typeDefaults.concat(restored.parsedListing && restored.parsedListing.selectedUSP || [])));
+      }
       const legacyCondition = normalizeText(restored.manualOverrides && restored.manualOverrides.condition);
       const legacyStatus = { baru: 'Baru', second: 'Second', 'aset bank': 'Aset Bank' }[legacyCondition];
       if (legacyStatus) {
@@ -735,12 +753,22 @@
     return area ? area.area : raw;
   }
 
+  function parsePriceType(text) {
+    const lines = String(text || '').split(/\r?\n/).map((line) => normalizeText(line).replace(/m\^2/gi, 'm2').replace(/²/g, '2'));
+    const perSquareMeter = /(?:\/\s*(?:m2|meter\s*(?:persegi|2))\b|\bper\s*(?:m2|meter\s*(?:persegi|2))\b|\bpermeter\s*(?:persegi|2)\b)/i;
+    if (lines.some((line) => perSquareMeter.test(line))) return 'PER_SQUAREMETER';
+    if (lines.some((line) => ((/\b(?:tipe\s*harga|price\s*type|harga|price)\b/i.test(line) && /\btotal\b/i.test(line)) || /^total\b/i.test(line)))) return 'TOTAL';
+    return '';
+  }
+
   function parsePrice(text) {
     const fullSource = String(text || '');
-    const labeledLine = fullSource.split(/\r?\n/).find((line) => /\b(harga|price)\b/i.test(line));
-    const source = labeledLine || fullSource.split(/\r?\n/).filter((line) => !/\b(luas\s*tanah|luas\s*bangunan|listrik|kamar\s*tidur|kamar\s*mandi)\b/i.test(line)).join('\n');
+    const sourceLines = fullSource.split(/\r?\n/);
+    const labeledLine = sourceLines.find((line) => /\b(harga|price)\b/i.test(line) && !/^\s*(?:tipe\s*harga|price\s*type)\b/i.test(line));
+    const source = labeledLine || sourceLines.filter((line) => !/\b(?:tipe\s*harga|price\s*type|luas\s*tanah|luas\s*bangunan|panjang|lebar|listrik|kamar\s*tidur|kamar\s*mandi)\b/i.test(line)).join('\n');
+    const priceType = parsePriceType(fullSource);
     const match = source.match(/(?:harga|price)?\s*[:=]?\s*(\d[\d.,]*)\s*(triliun|trilyun|miliar|m|juta|jt|ribu|rb)\b/i);
-    if (!match) return {};
+    if (!match) return priceType ? { priceType } : {};
     const unitText = normalizeText(match[2]);
     let priceUnit = 'Ribu';
     if (/^(m|miliar)$/.test(unitText)) priceUnit = 'Miliar';
@@ -748,7 +776,7 @@
     else if (/^(triliun|trilyun)$/.test(unitText)) priceUnit = 'Triliun';
     const price = parseLocalizedNumber(match[1], true);
     const negotiable = /\b(nego|nego tipis|negotiable|bisa nego)\b/i.test(source);
-    return { price, priceUnit, negotiable };
+    return { price, priceUnit, negotiable, priceType };
   }
 
   function formatPriceAmount(value) {
@@ -832,7 +860,20 @@
     };
     const area = (labelPattern) => {
       const line = lineValue(labelPattern);
+      const remainder = line.replace(labelPattern, '').trim().replace(/^[:=]\s*/, '');
+      if (/^\d[\d.,]*\s*[x×]\s*\d/i.test(remainder)) return null;
       const match = line.match(/([\d][\d.,]*)/);
+      return match ? parseLocalizedNumber(match[1], false) : null;
+    };
+    const landDimension = (labelPattern) => {
+      const line = lines.find((item) => {
+        if (!labelPattern.test(item)) return false;
+        const remainder = item.replace(labelPattern, '').trim();
+        return /^(?:[:=]\s*)?\d/i.test(remainder);
+      }) || '';
+      if (!line) return null;
+      const remainder = line.replace(labelPattern, '').trim().replace(/^[:=]\s*/, '').trim();
+      const match = remainder.match(/^(\d[\d.,]*)(?:\s*(?:m|meter))?$/i);
       return match ? parseLocalizedNumber(match[1], false) : null;
     };
     const room = (pattern) => {
@@ -843,13 +884,42 @@
     };
 
     const landArea = area(/^(?:luas\s*tanah|lt)\b/i);
+    const explicitLandLength = landDimension(/^panjang(?:\s+(?:tanah|lt)\b)?/i);
+    const explicitLandWidth = landDimension(/^lebar(?:\s+(?:tanah|lt)\b)?/i);
+    const buildingLength = landDimension(/^panjang\s+bangunan\b/i);
+    const buildingWidth = landDimension(/^lebar\s+bangunan\b/i);
+    const combinedDimensionLine = lines.find((line) => /\d[\d.,]*\s*[x×]\s*\d[\d.,]*/i.test(line)
+      && (/(?:\blt\b|luas\s*tanah|tanah|lahan|kavling)/i.test(line)
+        || (normalizeText(parsed.propertyType) === 'tanah' && /(?:ukuran|dimensi)/i.test(line)))) || '';
+    const combinedDimensions = combinedDimensionLine.match(/(\d[\d.,]*)\s*[x×]\s*(\d[\d.,]*)/i);
+    const landWidth = explicitLandWidth != null ? explicitLandWidth : combinedDimensions ? parseLocalizedNumber(combinedDimensions[1], false) : null;
+    const landLength = explicitLandLength != null ? explicitLandLength : combinedDimensions ? parseLocalizedNumber(combinedDimensions[2], false) : null;
     const buildingArea = area(/^(?:luas\s*bangunan|lb)\b/i);
+    const apartmentNameLine = lineValue(/^(?:nama\s*apartemen|apartment\s*name|apartemen)\s*[:=]/i);
+    const apartmentNameMatch = apartmentNameLine.match(/^(?:nama\s*apartemen|apartment\s*name|apartemen)\s*[:=]\s*(.+)$/i);
+    const complexLine = lineValue(/^(?:komplek(?:\s*perumahan)?|kompleks(?:\s*perumahan)?|nama\s*komplek)\s*[:=]/i);
+    const complexMatch = complexLine.match(/^(?:komplek(?:\s*perumahan)?|kompleks(?:\s*perumahan)?|nama\s*komplek)\s*[:=]\s*(.+)$/i);
+    const builtYearLine = lineValue(/^(?:tahun\s*(?:dibangun|pembangunan|bangun)|built\s*year)\b/i);
+    const renovationYearLine = lineValue(/^(?:tahun\s*(?:direnovasi|renovasi)|renovation\s*year)\b/i);
+    const sceneryLine = lineValue(/^pemandangan\b/i);
     const bedrooms = room(/^(?:kt|kamar\s*tidur)(?!\s*pembantu)\b/i);
     const bathrooms = room(/^(?:km|kamar\s*mandi)(?!\s*pembantu)\b/i);
     const helperBedroomLine = lineValue(/^kamar\s*tidur\s*pembantu\b/i);
     const helperBathroomLine = lineValue(/^kamar\s*mandi\s*pembantu\b/i);
     if (landArea != null) parsed.landArea = landArea;
+    if (landLength != null) parsed.landLength = landLength;
+    if (landWidth != null) parsed.landWidth = landWidth;
+    if (buildingLength != null) parsed.buildingLength = buildingLength;
+    if (buildingWidth != null) parsed.buildingWidth = buildingWidth;
     if (buildingArea != null) parsed.buildingArea = buildingArea;
+    if (apartmentNameMatch && apartmentNameMatch[1].trim()) parsed.apartmentName = apartmentNameMatch[1].trim();
+    if (complexMatch && complexMatch[1].trim()) parsed.complexName = complexMatch[1].trim();
+    const builtYearMatch = builtYearLine.match(/\b(19\d{2}|20\d{2})\b/);
+    if (builtYearMatch) parsed.builtYear = Number(builtYearMatch[1]);
+    const renovationYearMatch = renovationYearLine.match(/\b(19\d{2}|20\d{2})\b/);
+    if (renovationYearMatch) parsed.renovationYear = Number(renovationYearMatch[1]);
+    const scenery = CONFIG.sceneries.find(([, label]) => normalizeText(sceneryLine).includes(normalizeText(label)));
+    if (scenery) parsed.scenery = scenery[0];
     if (bedrooms != null) {
       parsed.bedrooms = bedrooms.main;
       if (bedrooms.helper != null) parsed.helperBedrooms = bedrooms.helper;
@@ -862,6 +932,11 @@
     const helperBathroomCount = helperBathroomLine.match(/(\d+)/);
     if (helperBedroomCount) parsed.helperBedrooms = Number(helperBedroomCount[1]);
     if (helperBathroomCount) parsed.helperBathrooms = Number(helperBathroomCount[1]);
+    if (normalizeText(parsed.propertyType) === 'kost') {
+      const roomCountLine = lineValue(/^jumlah\s*kamar(?!\s*mandi)\b/i);
+      const roomCount = roomCountLine.match(/(\d+)/);
+      if (roomCount) parsed.bedrooms = Number(roomCount[1]);
+    }
 
     const electricityLine = lineValue(/^(?:daya\s*listrik|listrik)\b/i);
     const electricityMatch = electricityLine.match(/([\d][\d.,]*)\s*(?:watt|w)?\b/i);
@@ -890,14 +965,124 @@
     const floorsLine = lineValue(/^(?:jumlah\s*lantai|lantai)\b/i) || lines.find((line) => /\b\d+\s*lantai\b/i.test(line)) || '';
     const floorsMatch = floorsLine.match(/(\d+)\s*lantai\b/i) || floorsLine.match(/(\d+)/);
     if (floorsMatch) parsed.floors = Number(floorsMatch[1]);
+    const storeyLine = lineValue(/^nomor\s*lantai\b/i);
+    const storeyMatch = storeyLine.match(/(\d+)/);
+    if (storeyMatch) {
+      if (normalizeText(parsed.propertyType) === 'apartemen') parsed.floors = Number(storeyMatch[1]);
+      else parsed.storey = Number(storeyMatch[1]);
+    }
     const roadLine = lineValue(/^(?:lebar\s*jalan)\b/i);
     const roadMatch = roadLine.match(/\b([1-4])\b/);
     if (roadMatch) parsed.roadWidth = CONFIG.roadWidths[Number(roadMatch[1])][0];
+    const imbLine = lineValue(/^imb\b/i);
+    const imbValue = imbLine.replace(/^imb\s*[:=-]?\s*/i, '').trim();
+    if (/^(?:ya|ada|tersedia|sudah|yes|true)$/i.test(imbValue)) parsed.imb = true;
+    else if (/^(?:tidak(?:\s+ada)?|belum|no|false)$/i.test(imbValue)) parsed.imb = false;
+    const rukoFacilitiesLine = normalizeText(parsed.propertyType) === 'ruko' ? lineValue(/^(?:fasilitas\s*ruko|fasilitas)\s*[:=]/i) : '';
+    if (rukoFacilitiesLine) {
+      const rukoFacilitiesText = rukoFacilitiesLine.replace(/^(?:fasilitas\s*ruko|fasilitas)\s*[:=]\s*/i, '');
+      const facilityPatterns = {
+        AC: /\bac\b/i,
+        'Jalur Telepon': /jalur\s*telepon|telepon/i,
+        CCTV: /\bcctv\b/i,
+        'WIFI/Internet': /\bwi[\s-]?fi\b|\binternet\b/i,
+        Rooftop: /rooftop/i,
+        'Parking Area': /parking|parkir/i
+      };
+      parsed.rukoFacilities = CONFIG.rukoFacilities.filter((name) => facilityPatterns[name].test(rukoFacilitiesText));
+      parsed.rukoFacilitiesTouched = true;
+    }
+    const warehouseFacilitiesLine = normalizeText(parsed.propertyType) === 'gudang' ? lineValue(/^(?:fasilitas\s*gudang|fasilitas)\s*[:=]/i) : '';
+    if (warehouseFacilitiesLine) {
+      const warehouseFacilitiesText = warehouseFacilitiesLine.replace(/^(?:fasilitas\s*gudang|fasilitas)\s*[:=]\s*/i, '');
+      const facilityPatterns = {
+        AC: /\bac\b/i,
+        'Jalur Telepon': /jalur\s*telepon|telepon/i,
+        CCTV: /\bcctv\b/i,
+        'WIFI/Internet': /\bwi[\s-]?fi\b|\binternet\b/i,
+        'Mess Karyawan': /mess\s*karyawan|mess/i,
+        'Kantin Karyawan': /kantin\s*karyawan|kantin/i,
+        'Meeting Room': /meeting\s*room|ruang\s*rapat/i,
+        Mushola: /mushola|musala/i,
+        Keamanan: /keamanan|security/i,
+        'Elevator/Lift': /elevator|lift/i,
+        Genset: /genset/i,
+        'Loading Dock': /loading\s*dock/i,
+        'Akses Fusso': /akses\s*fusso|fusso/i,
+        'Akses Engkel Box': /akses\s*engkel\s*box|engkel\s*box/i,
+        'Parking Area': /parking|parkir/i
+      };
+      parsed.warehouseFacilities = CONFIG.warehouseFacilities.filter((name) => facilityPatterns[name].test(warehouseFacilitiesText));
+      parsed.warehouseFacilitiesTouched = true;
+    }
+    const kostRoomFacilitiesLine = normalizeText(parsed.propertyType) === 'kost' ? lineValue(/^(?:fasilitas\s*kamar\s*(?:kost|kos)|fasilitas\s*kamar)\s*[:=]/i) : '';
+    if (kostRoomFacilitiesLine) {
+      const facilitiesText = kostRoomFacilitiesLine.replace(/^(?:fasilitas\s*kamar\s*(?:kost|kos)|fasilitas\s*kamar)\s*[:=]\s*/i, '');
+      const patterns = {
+        'Air Jernih': /air\s*(?:jernih|bersih)/i,
+        Kasur: /kasur|ranjang/i,
+        Cermin: /cermin/i,
+        'Lemari Baju': /lemari/i,
+        Meja: /meja/i,
+        TV: /\btv\b|televisi/i,
+        'Kloset Duduk': /kloset\s*duduk/i,
+        'Kloset Jongkok': /kloset\s*jongkok/i,
+        Shower: /shower/i,
+        AC: /\bac\b/i,
+        'Water Heater': /water\s*heater/i,
+        'Cable TV / Pay TV': /cable\s*tv|pay\s*tv/i,
+        'Wifi / Internet': /wi[\s-]?fi|internet/i
+      };
+      parsed.kostRoomFacilities = CONFIG.kostRoomFacilities.filter((name) => patterns[name].test(facilitiesText));
+      parsed.kostRoomFacilitiesTouched = true;
+    }
+    const kostFacilitiesLine = normalizeText(parsed.propertyType) === 'kost' ? lineValue(/^(?:fasilitas\s*(?:kost|kos)|fasilitas)\s*[:=]/i) : '';
+    if (kostFacilitiesLine) {
+      const facilitiesText = kostFacilitiesLine.replace(/^(?:fasilitas\s*(?:kost|kos)|fasilitas)\s*[:=]\s*/i, '');
+      const patterns = {
+        'Kamar Mandi Luar': /kamar\s*mandi\s*luar/i,
+        'Tempat Jemuran': /tempat\s*jemuran|jemuran/i,
+        'Wifi / Internet': /wi[\s-]?fi|internet/i,
+        'Water Heater': /water\s*heater/i,
+        'Tenaga Keamanan': /tenaga\s*keamanan|security/i,
+        'Tenaga Kebersihan': /tenaga\s*kebersihan|cleaning\s*service/i,
+        Dapur: /\bdapur\b|kitchen/i,
+        Microwave: /microwave/i,
+        Dispenser: /dispenser/i,
+        'Tempat Gym': /tempat\s*gym|gym/i,
+        'Mesin Cuci': /mesin\s*cuci|washing\s*machine/i,
+        CCTV: /\bcctv\b/i,
+        Laundry: /laundry/i,
+        Kompor: /kompor|stove/i,
+        Wastafel: /wastafel|sink/i,
+        Kulkas: /kulkas|refrigerator/i,
+        Taman: /\btaman\b|garden/i,
+        'Kolam Renang': /kolam\s*renang|pool/i,
+        'Ruang Tamu': /ruang\s*tamu|living\s*room/i,
+        TV: /\btv\b|televisi/i,
+        'Parking Area': /parking|parkir/i
+      };
+      parsed.kostFacilities = CONFIG.kostFacilities.filter((name) => patterns[name].test(facilitiesText));
+      parsed.kostFacilitiesTouched = true;
+    }
+    const paymentMethodsLine = lineValue(/^metode\s*pembayaran\b/i);
+    if (paymentMethodsLine) {
+      const paymentText = paymentMethodsLine.replace(/^metode\s*pembayaran\s*[:=-]?\s*/i, '');
+      const paymentPatterns = {
+        Kredit: /\bkredit\b|\bkpa\b|\bkpr\b/i,
+        KPR: /\bkpr\b|\bkredit\b|\bkpa\b/i,
+        'Cash Keras': /cash\s*keras|tunai/i,
+        'Cicilan Bertahap': /cicilan\s*bertahap|angsuran\s*bertahap/i
+      };
+      const paymentOptions = normalizeText(parsed.propertyType) === 'kost' ? CONFIG.kostPaymentMethods : CONFIG.rukoPaymentMethods;
+      parsed.paymentMethods = paymentOptions.filter((name) => paymentPatterns[name].test(paymentText));
+      parsed.paymentMethodsTouched = true;
+    }
 
-    const priceLine = lines.find((line) => /\b(harga|price)\b/i.test(line)) || text;
-    const price = parsePrice(priceLine);
+    const price = parsePrice(text);
     if (price.price != null) parsed.price = price.price;
     if (price.priceUnit) parsed.priceUnit = price.priceUnit;
+    if (price.priceType && normalizeText(parsed.propertyType) !== 'kost') parsed.priceType = price.priceType;
     parsed.negotiable = price.negotiable === true;
     const explicitCoBroke = text.match(/co[\s-]?broke\s*[:=]?\s*(ya|tidak|yes|no|true|false|1|0)/i);
     if (/\b(tanpa co[\s-]?broke|tidak co[\s-]?broke|no co[\s-]?broke)\b/i.test(text)) parsed.coBroke = false;
@@ -920,6 +1105,10 @@
     const parsed = Object.fromEntries(Object.entries(state.parsedListing || {}).filter(([, value]) => value != null && value !== ''));
     const overrides = Object.fromEntries(Object.entries(state.manualOverrides || {}).filter(([key, value]) => (key === 'roadWidth' && value != null) || (value != null && !(typeof value === 'string' && value.trim() === ''))));
     const data = Object.assign({}, defaults, parsed, overrides);
+    if (['ruko', 'gudang', 'kost'].includes(normalizeText(data.propertyType))
+      && !Object.prototype.hasOwnProperty.call(state.parsedListing || {}, 'roadWidth')
+      && !Object.prototype.hasOwnProperty.call(state.manualOverrides || {}, 'roadWidth')) delete data.roadWidth;
+    if (normalizeText(data.propertyType) === 'kost') delete data.priceType;
     data.coBroke = Object.prototype.hasOwnProperty.call(state.manualOverrides, 'coBroke')
       ? Boolean(state.manualOverrides.coBroke)
       : (Object.prototype.hasOwnProperty.call(state.parsedListing, 'coBroke') ? Boolean(state.parsedListing.coBroke) : false);
@@ -930,7 +1119,7 @@
   function buildAutoTitle(data) {
     const type = data.propertyType || 'Rumah';
     const floors = Number(data.floors);
-    const base = type + (Number.isFinite(floors) && floors > 1 ? ' ' + floors + ' Lantai' : '');
+    const base = type + (normalizeText(type) !== 'apartemen' && Number.isFinite(floors) && floors > 1 ? ' ' + floors + ' Lantai' : '');
     const manualLocation = state.manualOverrides && state.manualOverrides.locationQuery;
     const location = String(manualLocation ? data.locationQuery : (data.locationRaw || data.locationQuery) || '').replace(/\b(dijual|disewa|jual|sewa)\b/ig, '').replace(/[,]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/[.!?;]+$/g, '');
     const benefits = Array.from(new Set([...(state.selectedUSP || []), ...(state.descriptionHighlights || []), ...(state.customHighlights || [])]))
@@ -968,34 +1157,73 @@
     const transaction = data.listingType === 'Sewa' ? 'Disewakan ' : data.listingType === 'Jual' ? 'Dijual ' : '';
     const lines = [];
     if (location) lines.push(transaction + type + ' di ' + location);
-    if (data.landArea != null && data.landArea !== '') lines.push('Luas Tanah ' + data.landArea + ' m²');
+    if (normalizeText(type) !== 'apartemen' && data.landArea != null && data.landArea !== '') lines.push('Luas Tanah ' + data.landArea + ' m²');
+    const isRuko = normalizeText(type) === 'ruko';
+    const isWarehouse = normalizeText(type) === 'gudang';
+    const isKost = normalizeText(type) === 'kost';
+    const isCommercialProperty = isRuko || isWarehouse;
+    if ((normalizeText(type) === 'tanah' || isCommercialProperty) && data.landLength != null && data.landLength !== '') lines.push('Panjang Tanah ' + data.landLength + ' m');
+    if ((normalizeText(type) === 'tanah' || isCommercialProperty) && data.landWidth != null && data.landWidth !== '') lines.push('Lebar Tanah ' + data.landWidth + ' m');
     if (data.buildingArea != null && data.buildingArea !== '') lines.push('Luas Bangunan ' + data.buildingArea + ' m²');
+    if (isCommercialProperty) {
+      if (data.complexName) lines.push('Komplek Perumahan ' + data.complexName);
+      if (data.buildingLength != null && data.buildingLength !== '') lines.push('Panjang Bangunan ' + data.buildingLength + ' m');
+      if (data.buildingWidth != null && data.buildingWidth !== '') lines.push('Lebar Bangunan ' + data.buildingWidth + ' m');
+      if (isRuko && data.storey != null && data.storey !== '') lines.push('Nomor Lantai ' + data.storey);
+      if (data.builtYear) lines.push('Tahun Dibangun ' + data.builtYear);
+      if (data.renovationYear) lines.push('Tahun Direnovasi ' + data.renovationYear);
+      if (data.imb != null) lines.push('IMB ' + (data.imb ? 'Ada' : 'Tidak Ada'));
+      const commercialFacilities = isWarehouse ? data.warehouseFacilities : data.rukoFacilities;
+      const facilitiesTouched = isWarehouse ? data.warehouseFacilitiesTouched : data.rukoFacilitiesTouched;
+      if (facilitiesTouched && commercialFacilities && commercialFacilities.length) lines.push('Fasilitas ' + (isWarehouse ? 'Gudang ' : 'Ruko ') + commercialFacilities.join(', '));
+      if (data.paymentMethodsTouched && data.paymentMethods && data.paymentMethods.length) lines.push('Metode Pembayaran ' + data.paymentMethods.join(', '));
+    }
+    if (isKost) {
+      if (data.complexName) lines.push('Komplek Perumahan ' + data.complexName);
+      if (data.builtYear) lines.push('Tahun Dibangun ' + data.builtYear);
+      if (data.renovationYear) lines.push('Tahun Direnovasi ' + data.renovationYear);
+      if (data.imb != null) lines.push('IMB ' + (data.imb ? 'Ada' : 'Tidak Ada'));
+      if (data.kostRoomFacilitiesTouched && data.kostRoomFacilities && data.kostRoomFacilities.length) lines.push('Fasilitas Kamar Kost ' + data.kostRoomFacilities.join(', '));
+      if (data.kostFacilitiesTouched && data.kostFacilities && data.kostFacilities.length) lines.push('Fasilitas Kost ' + data.kostFacilities.join(', '));
+      if (data.paymentMethodsTouched && data.paymentMethods && data.paymentMethods.length) lines.push('Metode Pembayaran ' + data.paymentMethods.join(', '));
+    }
+    if (normalizeText(type) === 'apartemen') {
+      if (data.apartmentName) lines.push('Nama Apartemen ' + data.apartmentName);
+      if (data.floors != null && data.floors !== '') lines.push('Nomor Lantai ' + data.floors);
+      if (data.builtYear) lines.push('Tahun Dibangun ' + data.builtYear);
+      if (data.renovationYear) lines.push('Tahun Direnovasi ' + data.renovationYear);
+      const sceneryLabel = CONFIG.sceneries.find(([value]) => value === data.scenery);
+      if (sceneryLabel) lines.push('Pemandangan ' + sceneryLabel[1]);
+    }
     const formatRooms = (main, helper) => main == null || main === '' ? '' : String(main) + (Number(helper) > 0 ? '+' + helper : '');
     const bedrooms = formatRooms(data.bedrooms, data.helperBedrooms);
-    const bathrooms = formatRooms(data.bathrooms, data.helperBathrooms);
-    if (bedrooms) lines.push('Kamar Tidur ' + bedrooms);
+    const bathrooms = isCommercialProperty || isKost ? formatRooms(data.bathrooms, 0) : formatRooms(data.bathrooms, data.helperBathrooms);
+    if (isKost && data.bedrooms != null && data.bedrooms !== '') lines.push('Jumlah Kamar ' + data.bedrooms);
+    else if (!isCommercialProperty && bedrooms) lines.push('Kamar Tidur ' + bedrooms);
     if (bathrooms) lines.push('Kamar Mandi ' + bathrooms);
-    if (data.electricity != null && data.electricity !== '') lines.push('Listrik ' + data.electricity + ' Watt');
-    if (data.floors != null && data.floors !== '') lines.push(type + ' ' + data.floors + ' lantai');
-    if (data.garage != null && data.garage !== '') lines.push('Garasi ' + data.garage);
-    if (data.carport != null && data.carport !== '') lines.push('Carport ' + data.carport);
-    if (data.direction) lines.push('Hadap ' + data.direction);
-    if (data.roadWidth) {
+    if (!isKost && data.electricity != null && data.electricity !== '') lines.push('Listrik ' + data.electricity + ' Watt');
+    if (normalizeText(type) !== 'apartemen' && data.floors != null && data.floors !== '') lines.push(type + ' ' + data.floors + ' lantai');
+    if (!isCommercialProperty && !isKost && data.garage != null && data.garage !== '') lines.push('Garasi ' + data.garage);
+    if (!isCommercialProperty && data.carport != null && data.carport !== '') lines.push('Carport ' + data.carport);
+    if (!isCommercialProperty && !isKost && data.direction) lines.push('Hadap ' + data.direction);
+    if (!['apartemen', 'tanah', 'gudang', 'kost'].includes(normalizeText(type)) && data.roadWidth) {
       const roadLabel = CONFIG.roadWidths.find(([value]) => value === data.roadWidth);
       if (roadLabel && roadLabel[1] !== '?') lines.push('Lebar Jalan ' + roadLabel[1] + ' mobil');
     }
-    if (data.waterSourceRaw) lines.push('Sumber Air ' + data.waterSourceRaw);
+    if (!isCommercialProperty && !isKost && data.waterSourceRaw) lines.push('Sumber Air ' + data.waterSourceRaw);
     if (data.price != null && data.price !== '') {
-      const priceWasManuallyChanged = ['price', 'priceUnit', 'negotiable'].some((key) => Object.prototype.hasOwnProperty.call(state.manualOverrides || {}, key));
+      const priceWasManuallyChanged = ['price', 'priceUnit', 'priceType', 'negotiable'].some((key) => Object.prototype.hasOwnProperty.call(state.manualOverrides || {}, key));
       const sourcePriceLine = !priceWasManuallyChanged && String(state.rawListing || '').split(/\r?\n/).find((line) => /^\s*(?:harga|price)\b/i.test(line));
       const suffix = { Miliar: 'M', Juta: 'juta', Triliun: 'T', Ribu: 'ribu' }[data.priceUnit] || '';
+      const priceTypeSuffix = data.priceType === 'PER_SQUAREMETER' ? ' per m²' : data.priceType === 'TOTAL' ? ' total' : '';
       const pricePattern = /^(\s*(?:harga|price)\s*[:=-]?\s*(?:rp\.?\s*)?)(\d[\d.,]*)/i;
-      const sourceMatch = sourcePriceLine && sourcePriceLine.trim().match(pricePattern);
+      const sourceHasMatchingPriceType = !data.priceType || parsePriceType(sourcePriceLine) === data.priceType;
+      const sourceMatch = sourceHasMatchingPriceType && sourcePriceLine && sourcePriceLine.trim().match(pricePattern);
       if (sourceMatch) {
         const prefix = sourceMatch[1].replace(/\bprice\b/i, 'Harga');
         lines.push(prefix + formatPriceAmount(data.price) + sourcePriceLine.trim().slice(sourceMatch[0].length));
       } else {
-        lines.push('Harga ' + formatPriceAmount(data.price) + suffix + (data.negotiable ? ' nego' : ''));
+        lines.push('Harga ' + formatPriceAmount(data.price) + suffix + priceTypeSuffix + (data.negotiable ? ' nego' : ''));
       }
     }
     const structured = lines.join('\n');
@@ -1018,8 +1246,7 @@
   }
 
   function resolveDescriptionData() {
-    const defaults = state.preset === 'none' ? {} : CONFIG.preset;
-    return Object.assign({}, defaults, state.parsedListing || {}, state.manualOverrides || {});
+    return resolveData();
   }
 
   function controlValue(element) {
@@ -1297,7 +1524,7 @@
       if (!details.open) { const summary = details.querySelector('summary'); if (summary) summary.click(); }
       return true;
     }
-    const contents = '[data-testid="face"],[data-testid="electricity"],[data-testid="waterSource"]';
+    const contents = '[data-testid="face"],[data-testid="electricity"],[data-testid="waterSource"],[data-testid="land_length"],[data-testid="scenery"],[data-testid="builtYear"],[data-testid="renovationYear"]';
     if (!queryVisible(contents)) {
       const clickableHeader = header.closest('.cursor-pointer') || header;
       clickElement(clickableHeader);
@@ -1314,10 +1541,18 @@
         'input[name="landSize"]', '[data-testid="landSize"] input',
         'input[id*="landSize" i]', 'input[aria-label*="Luas Tanah" i]'
       ],
+      landLength: ['input[placeholder*="Panjang Tanah" i]'],
+      landWidth: ['input[placeholder*="Lebar Tanah" i]'],
+      buildingLength: ['input[name="building_length"]', 'input[placeholder*="Panjang Bangunan" i]'],
+      buildingWidth: ['input[name="building_width"]', 'input[placeholder*="Lebar Bangunan" i]'],
+      storey: ['input[name="storey"]', '[data-testid="storey"] input'],
       buildingArea: [
         'input[name="buildingSize"]', '[data-testid="buildingSize"] input',
         'input[id*="buildingSize" i]', 'input[aria-label*="Luas Bangunan" i]'
-      ]
+      ],
+      floors: ['input[name="storey"]', '[data-testid="storey"] input'],
+      builtYear: ['input[name="builtYear"]', '[data-testid="builtYear"] input'],
+      renovationYear: ['input[name="renovationYear"]', '[data-testid="renovationYear"] input']
     };
     const resolveControl = () => {
       const selectors = stableSelectors[field] || [];
@@ -1597,6 +1832,18 @@
     return waitUntil(() => normalizeText(controlValue(input)).includes(normalizeText(value)), 1800);
   }
 
+  async function fillApartmentName(value) {
+    if (!value) return null;
+    const ok = await chooseLocationDropdown('Pilih Nama Apartemen', value);
+    return result('apartmentName', value, ok, ok ? '' : 'Nama Apartemen "' + value + '" belum cocok dengan pilihan dropdown.', true);
+  }
+
+  async function fillComplexName(value) {
+    if (!value) return null;
+    const ok = await chooseLocationDropdown('Pilih Komplek Perumahan', value);
+    return result('complexName', value, ok, ok ? '' : 'Komplek Perumahan "' + value + '" belum cocok dengan pilihan dropdown.', false);
+  }
+
   async function fillStructuredLocation(query, data) {
     const parts = locationParts(query, data);
     if (!parts) return false;
@@ -1653,15 +1900,16 @@
     return result('location', query, ok, ok ? '' : 'Suggestion lokasi diklik, tetapi area belum dapat diverifikasi.', true);
   }
 
-  function selectCertificate(certificate) {
-    return selectCardOption('certificate', 'Sertifikat', certificate);
+  function selectCertificate(certificate, propertyType) {
+    const value = normalizeText(propertyType) === 'apartemen' && normalizeText(certificate) === 'strata title' ? 'Strata' : certificate;
+    return selectCardOption('certificate', 'Sertifikat', value);
   }
 
   async function selectCardOption(field, groupLabel, value) {
     if (!value) return null;
     const findGroup = () => {
       const groups = Array.from(document.querySelectorAll('[data-testid="' + field + '"]')).filter(visible);
-      return groups.find((element) => visibleText(element).startsWith(normalizeText(groupLabel))) || null;
+      return groups.find((element) => visibleText(element).includes(normalizeText(groupLabel))) || null;
     };
     const radioLabel = (radio) => {
       if (!radio) return null;
@@ -1812,6 +2060,60 @@
     });
   }
 
+  function fillRukoFacilities(names) {
+    CONFIG.rukoFacilities.forEach((name) => {
+      const desired = (names || []).includes(name);
+      const ok = setCheckboxById('roomFacilities-' + name, desired);
+      result('rukoFacility:' + name, desired, ok, ok ? '' : 'Fasilitas Ruko ' + name + ' tidak ditemukan.', false);
+    });
+  }
+
+  function fillWarehouseFacilities(names) {
+    CONFIG.warehouseFacilities.forEach((name) => {
+      const desired = (names || []).includes(name);
+      const ok = setCheckboxById('roomFacilities-' + name, desired);
+      result('warehouseFacility:' + name, desired, ok, ok ? '' : 'Fasilitas Gudang ' + name + ' tidak ditemukan.', false);
+    });
+  }
+
+  function fillKostRoomFacilities(names) {
+    CONFIG.kostRoomFacilities.forEach((name) => {
+      const desired = (names || []).includes(name);
+      const ok = setCheckboxById('room-' + name, desired);
+      result('kostRoomFacility:' + name, desired, ok, ok ? '' : 'Fasilitas kamar Kost ' + name + ' tidak ditemukan.', false);
+    });
+  }
+
+  function fillKostFacilities(names) {
+    CONFIG.kostFacilities.forEach((name) => {
+      const desired = (names || []).includes(name);
+      const ok = setCheckboxById('generalFacility-' + name, desired);
+      result('kostFacility:' + name, desired, ok, ok ? '' : 'Fasilitas Kost ' + name + ' tidak ditemukan.', false);
+    });
+  }
+
+  function fillKostPaymentMethods(names) {
+    CONFIG.kostPaymentMethods.forEach((name) => {
+      const desired = (names || []).includes(name);
+      const ok = setCheckboxById('paymentMethods-' + name, desired);
+      result('kostPaymentMethod:' + name, desired, ok, ok ? '' : 'Metode pembayaran Kost ' + name + ' tidak ditemukan.', false);
+    });
+  }
+
+  function fillRukoPaymentMethods(names, propertyLabel) {
+    const label = propertyLabel || 'Ruko';
+    CONFIG.rukoPaymentMethods.forEach((name) => {
+      const desired = (names || []).includes(name);
+      const ok = setCheckboxById('paymentMethods-' + name, desired);
+      result('paymentMethod:' + name, desired, ok, ok ? '' : 'Metode pembayaran ' + label + ' ' + name + ' tidak ditemukan.', false);
+    });
+  }
+
+  function fillIMB(value) {
+    const ok = setCheckboxById('IMB', value === true);
+    result('imb', value === true, ok, ok ? '' : 'Checkbox IMB tidak ditemukan atau gagal diubah.', false);
+  }
+
   function fillResidentialFacilities(names) {
     CONFIG.residentialFacilities.forEach((idName) => {
       const desired = (names || []).includes(idName);
@@ -1879,43 +2181,125 @@
   }
 
   async function fillSpecification(data) {
-    const optionalData = ['direction', 'electricity', 'waterSourceRaw', 'waterSource', 'roadWidth'].some((key) => data[key] != null && data[key] !== '') || Boolean(data.roomFacilitiesTouched || data.residentialFacilitiesTouched);
+    const isLand = normalizeText(data.propertyType) === 'tanah';
+    const isApartment = normalizeText(data.propertyType) === 'apartemen';
+    const isRuko = normalizeText(data.propertyType) === 'ruko';
+    const isWarehouse = normalizeText(data.propertyType) === 'gudang';
+    const isKost = normalizeText(data.propertyType) === 'kost';
+    const isCommercialProperty = isRuko || isWarehouse;
+    const hasLandDimensions = isLand && ['landLength', 'landWidth'].some((key) => data[key] != null && data[key] !== '');
+    const optionalData = isLand
+      ? hasLandDimensions || Boolean(data.direction)
+      : isApartment
+        ? ['builtYear', 'renovationYear', 'scenery', 'electricity'].some((key) => data[key] != null && data[key] !== '')
+        : isRuko
+          ? ['buildingLength', 'buildingWidth', 'landLength', 'landWidth', 'builtYear', 'renovationYear', 'storey', 'electricity', 'roadWidth'].some((key) => data[key] != null && data[key] !== '') || Boolean(data.imb != null || data.rukoFacilitiesTouched || data.paymentMethodsTouched)
+          : isWarehouse
+            ? ['buildingLength', 'buildingWidth', 'landLength', 'landWidth', 'builtYear', 'renovationYear', 'electricity'].some((key) => data[key] != null && data[key] !== '') || Boolean(data.imb != null || data.warehouseFacilitiesTouched || data.paymentMethodsTouched)
+            : isKost
+              ? ['builtYear', 'renovationYear'].some((key) => data[key] != null && data[key] !== '') || Boolean(data.imb != null || data.kostRoomFacilitiesTouched || data.kostFacilitiesTouched || data.paymentMethodsTouched)
+              : ['direction', 'electricity', 'waterSourceRaw', 'waterSource', 'roadWidth'].some((key) => data[key] != null && data[key] !== '') || Boolean(data.roomFacilitiesTouched || data.residentialFacilitiesTouched);
     let locationReady = hasPopulatedLocation();
     if (data.locationQuery) {
       const locationResult = await fillLocation(data.locationQuery, data);
       locationReady = locationResult.success || hasPopulatedLocation();
     } else if (!locationReady) result('location', '', false, 'Lokasi belum dipilih.', true);
-    await fillTextField('landArea', data.landArea, ['Luas Tanah', 'LT'], true);
-    if (data.landArea != null && data.landArea !== '') await setAreaUnit('landArea');
-    await fillTextField('buildingArea', data.buildingArea, ['Luas Bangunan', 'LB'], false);
-    if (data.buildingArea != null && data.buildingArea !== '') await setAreaUnit('buildingArea');
-    await fillCounter('bedrooms', 'Kamar Tidur', data.bedrooms, false);
-    await fillCounter('bathrooms', 'Kamar Mandi', data.bathrooms, false);
-    await fillCounter('helperBedrooms', 'Kamar Tidur Pembantu', data.helperBedrooms, false);
-    await fillCounter('helperBathrooms', 'Kamar Mandi Pembantu', data.helperBathrooms, false);
-    await fillCounter('floors', 'Jumlah Lantai', data.floors, false);
-    await fillCounter('garage', 'Garasi', data.garage, false);
-    await fillCounter('carport', 'Carport', data.carport, false);
-    await selectCertificate(data.certificate);
-    if (data.condition) await selectCardOption('condition', 'Kondisi Properti', data.condition);
-    if (data.furnishing) {
-      const furnishingValue = normalizeText(data.furnishing) === 'full furnished' ? 'Furnished' : data.furnishing;
-      await selectCardOption('condition', 'Kondisi Perabotan', furnishingValue);
+    if (isApartment && data.apartmentName) await fillApartmentName(data.apartmentName);
+    if ((isCommercialProperty || isKost) && data.complexName) await fillComplexName(data.complexName);
+    if (!isApartment) {
+      await fillTextField('landArea', data.landArea, ['Luas Tanah', 'LT'], true);
+      if (data.landArea != null && data.landArea !== '') await setAreaUnit('landArea');
+    }
+    await selectCertificate(data.certificate, data.propertyType);
+    if (!isLand) {
+      await fillTextField('buildingArea', data.buildingArea, ['Luas Bangunan', 'LB'], isApartment || isCommercialProperty || isKost);
+      if (data.buildingArea != null && data.buildingArea !== '') await setAreaUnit('buildingArea');
+      await fillCounter('bathrooms', 'Kamar Mandi', data.bathrooms, false);
+      if (isKost) {
+        await fillCounter('bedrooms', 'Jumlah Kamar', data.bedrooms, false);
+      } else if (!isCommercialProperty) {
+        await fillCounter('bedrooms', 'Kamar Tidur', data.bedrooms, false);
+        await fillCounter('helperBedrooms', 'Kamar Tidur Pembantu', data.helperBedrooms, false);
+        await fillCounter('helperBathrooms', 'Kamar Mandi Pembantu', data.helperBathrooms, false);
+      }
+      if (isApartment) {
+        await fillTextField('floors', data.floors, ['Nomor Lantai'], true);
+      } else {
+        await fillCounter('floors', 'Jumlah Lantai', data.floors, false);
+        if (!isCommercialProperty && !isKost) {
+          await fillCounter('garage', 'Garasi', data.garage, false);
+        }
+        if (!isCommercialProperty) {
+          await fillCounter('carport', 'Carport', data.carport, false);
+        }
+      }
+      if (isRuko) await fillTextField('storey', data.storey, ['Nomor Lantai'], false);
+      if (data.condition) await selectCardOption('condition', 'Kondisi Properti', data.condition);
+      if (!isRuko && !isKost && data.furnishing) {
+        const furnishingValue = normalizeText(data.furnishing) === 'full furnished' ? 'Furnished' : data.furnishing;
+        await selectCardOption('condition', 'Kondisi Perabotan', furnishingValue);
+      }
     }
     if (optionalData) await ensureOptionalDetailsOpen();
-    if (data.direction) await selectCardOption('face', 'Hadap', data.direction);
-    else result('direction', '', false, 'Hadap belum ada di data listing atau Quick Fill, jadi perlu dipilih manual.', false);
-    if (data.roadWidth) await fillRoadWidth(data.roadWidth);
-    if (data.electricity != null) await fillElectricity(data.electricity);
-    if (data.waterSourceRaw || data.waterSource) fillWaterSource(data.waterSourceRaw, data.waterSource);
-    if (data.roomFacilitiesTouched) fillRoomFacilities(data.roomFacilities || []);
-    if (data.residentialFacilitiesTouched) fillResidentialFacilities(data.residentialFacilities || []);
+    if (isApartment || isCommercialProperty || isKost) {
+      await fillTextField('builtYear', data.builtYear, ['Tahun Dibangun'], false);
+      await fillTextField('renovationYear', data.renovationYear, ['Tahun Direnovasi'], false);
+    }
+    if (isLand || isCommercialProperty) {
+      await fillTextField('landLength', data.landLength, ['Panjang Tanah'], false);
+      await fillTextField('landWidth', data.landWidth, ['Lebar Tanah'], false);
+    }
+    if (isCommercialProperty || isKost) {
+      if (isCommercialProperty) {
+        await fillTextField('buildingLength', data.buildingLength, ['Panjang Bangunan'], false);
+        await fillTextField('buildingWidth', data.buildingWidth, ['Lebar Bangunan'], false);
+      }
+      if (data.imb != null) fillIMB(data.imb);
+    }
+    if (isApartment && data.scenery) {
+      const scenerySelect = queryVisible('[data-testid="scenery"] select');
+      const option = CONFIG.sceneries.find(([value]) => value === data.scenery);
+      const ok = Boolean(scenerySelect && option && await setNativeSelectVerified(scenerySelect, option[0], () => queryVisible('[data-testid="scenery"] select')));
+      result('scenery', option ? option[1] : data.scenery, ok, ok ? '' : 'Pilihan Pemandangan tidak ditemukan atau gagal dipilih.', false);
+    }
+    if (!isApartment && !isCommercialProperty && !isKost && data.direction) await selectCardOption('face', 'Hadap', data.direction);
+    else if (!isLand && !isApartment && !isCommercialProperty && !isKost) result('direction', '', false, 'Hadap belum ada di data listing atau Quick Fill, jadi perlu dipilih manual.', false);
+    if (!isLand) {
+      if (isApartment) {
+        if (data.electricity != null) await fillElectricity(data.electricity);
+      } else if (isRuko) {
+        if (data.roadWidth) await fillRoadWidth(data.roadWidth);
+        if (data.electricity != null) await fillElectricity(data.electricity);
+        if (data.rukoFacilitiesTouched) fillRukoFacilities(data.rukoFacilities || []);
+        if (data.paymentMethodsTouched) fillRukoPaymentMethods(data.paymentMethods || []);
+      } else if (isWarehouse) {
+        if (data.electricity != null) await fillElectricity(data.electricity);
+        if (data.warehouseFacilitiesTouched) fillWarehouseFacilities(data.warehouseFacilities || []);
+        if (data.paymentMethodsTouched) fillRukoPaymentMethods(data.paymentMethods || [], 'Gudang');
+      } else if (isKost) {
+        if (data.kostRoomFacilitiesTouched) fillKostRoomFacilities(data.kostRoomFacilities || []);
+        if (data.kostFacilitiesTouched) fillKostFacilities(data.kostFacilities || []);
+        if (data.paymentMethodsTouched) fillKostPaymentMethods(data.paymentMethods || []);
+      } else {
+        if (data.roadWidth) await fillRoadWidth(data.roadWidth);
+        if (data.electricity != null) await fillElectricity(data.electricity);
+        if (data.waterSourceRaw || data.waterSource) fillWaterSource(data.waterSourceRaw, data.waterSource);
+        if (data.roomFacilitiesTouched) fillRoomFacilities(data.roomFacilities || []);
+        if (data.residentialFacilitiesTouched) fillResidentialFacilities(data.residentialFacilities || []);
+      }
+    }
     await fillUSPs();
     // Jalan uses a remote suggestion search that can take several seconds. Fill the rest first.
     if (locationReady) await fillStreet(data.street || '', data.locationQuery);
   }
 
   function fillPriceAndCopy(data) {
+    if (['tanah', 'ruko', 'gudang'].includes(normalizeText(data.propertyType)) && data.priceType) {
+      const typeSelect = queryVisible('[data-testid="priceUnit"] select');
+      const ok = typeSelect ? setNativeSelect(typeSelect, data.priceType) : false;
+      const label = data.priceType === 'PER_SQUAREMETER' ? '/m²' : 'Total';
+      result('priceType', label, ok, ok ? '' : 'Pilihan Tipe Harga ' + label + ' tidak ditemukan atau gagal dipilih.', false);
+    }
     const priceBox = queryVisible('[data-testid="price"]');
     const priceInput = queryVisible('[data-testid="price"] input[name="price"]') || queryVisible('input[name="price"]');
     if (data.price != null && data.price !== '') {
@@ -1980,11 +2364,28 @@
       } else if (!controlValue(control)) errors.push('Field wajib ' + (control.getAttribute('aria-label') || control.name || control.placeholder || 'form') + ' belum terisi.');
     });
     if (page === 'specification') {
-      const land = queryVisible('input[name="landSize"]') || findControlByLabel(['Luas Tanah', 'LT'], 'input:not([type="checkbox"]),textarea');
-      if (!land || !controlValue(land)) errors.push('Luas Tanah wajib belum terisi.');
+      if (normalizeText(data.propertyType) === 'apartemen') {
+        const apartmentName = queryVisible('input[placeholder="Pilih Nama Apartemen"]');
+        const building = queryVisible('input[name="buildingSize"]') || findControlByLabel(['Luas Bangunan', 'LB'], 'input:not([type="checkbox"]),textarea');
+        const storey = queryVisible('input[name="storey"]') || queryVisible('[data-testid="storey"] input');
+        if (!apartmentName || !controlValue(apartmentName)) errors.push('Nama Apartemen wajib belum dipilih.');
+        if (!building || !controlValue(building)) errors.push('Luas Bangunan wajib belum terisi.');
+        if (!storey || !controlValue(storey)) errors.push('Nomor Lantai wajib belum terisi.');
+      } else {
+        const land = queryVisible('input[name="landSize"]') || findControlByLabel(['Luas Tanah', 'LT'], 'input:not([type="checkbox"]),textarea');
+        if (!land || !controlValue(land)) errors.push('Luas Tanah wajib belum terisi.');
+        if (['ruko', 'gudang', 'kost'].includes(normalizeText(data.propertyType))) {
+          const building = queryVisible('input[name="buildingSize"]') || findControlByLabel(['Luas Bangunan', 'LB'], 'input:not([type="checkbox"]),textarea');
+          if (!building || !controlValue(building)) errors.push('Luas Bangunan wajib belum terisi.');
+        }
+      }
       if (data.locationQuery && !filled.results.some((item) => item.field === 'location' && item.success) && !hasPopulatedLocation()) errors.push('Lokasi gagal dipilih.');
     }
     if (page === 'price' && data.price != null && !filled.results.some((item) => item.field === 'price' && item.success)) errors.push('Harga wajib belum terisi.');
+    if (page === 'price' && ['tanah', 'ruko', 'gudang'].includes(normalizeText(data.propertyType))) {
+      const priceType = queryVisible('[data-testid="priceUnit"] select');
+      if (!priceType || !controlValue(priceType)) errors.push('Tipe Harga wajib belum dipilih. Isi Total atau /m² dari data listing, atau pilih manual.');
+    }
     return Array.from(new Set(errors));
   }
 
@@ -2067,17 +2468,42 @@
             <div class="row"><label class="field">Tipe iklan<select id="q-listingType"><option value="">(tidak diubah)</option><option>Jual</option><option>Sewa</option></select></label><label class="field">Status<select id="q-propertyStatus"><option value="">(tidak diubah)</option><option>Baru</option><option>Second</option><option>Aset Bank</option></select></label></div>
             <label class="field">Lokasi pencarian<input type="text" id="q-locationQuery" placeholder="Semarang Barat, Genuk, atau Graha Padma"></label>
             <div class="row"><label class="field">Nama Jalan (opsional, dipilih dari hasil)<input type="text" id="q-street" placeholder="Kosongkan untuk pilih hasil lokasi"></label><label class="field">Sertifikat<input type="text" id="q-certificate" placeholder="Lainnya"></label></div>
-            <div class="grid3"><label class="field">Luas Tanah<input type="number" id="q-landArea"></label><label class="field">Luas Bangunan<input type="number" id="q-buildingArea"></label><label class="field">Daya listrik (W)<input type="number" id="q-electricity"></label></div>
-            <div class="grid3"><label class="field">Kamar Tidur<input type="number" id="q-bedrooms"></label><label class="field">Kamar Tidur Pembantu<input type="number" id="q-helperBedrooms"></label><label class="field">Kamar Mandi<input type="number" id="q-bathrooms"></label></div>
-            <div class="grid3"><label class="field">Kamar Mandi Pembantu<input type="number" id="q-helperBathrooms"></label><label class="field">Jumlah Lantai<input type="number" id="q-floors"></label><span></span></div>
-            <div class="grid3"><label class="field">Garasi<input type="number" id="q-garage"></label><label class="field">Carport<input type="number" id="q-carport"></label><label class="field">Kondisi Perabot<select id="q-furnishing"><option value="">(tidak diubah)</option><option>Furnished</option><option>Semi Furnished</option><option>Unfurnished</option></select></label></div>
-            <label class="field">Kondisi Properti<select id="q-condition"><option value="">(tidak diubah)</option><option>Bagus</option><option>Butuh Minim Renovasi</option><option>Butuh Renovasi Total</option><option>Terenovasi</option></select></label>
-            <label class="field">Hadap<select id="q-direction"><option value="">(tidak diubah)</option><option>Selatan</option><option>Barat Daya</option><option>Barat</option><option>Barat Laut</option><option>Utara</option><option>Timur Laut</option><option>Timur</option><option>Tenggara</option></select></label>
-            <label class="field">Lebar Jalan (jumlah mobil)</label><div class="seg" id="road-segments">${CONFIG.roadWidths.map(([value, label]) => '<button type="button" data-road="' + value + '" class="' + ((resolveData().roadWidth || '') === value ? 'active' : '') + '">' + label + '</button>').join('')}</div>
-            <label class="field">Sumber Air<select id="q-waterSource">${CONFIG.waterSources.map(([value, label]) => '<option value="' + value + '">' + label + '</option>').join('')}</select></label>
-            <details open><summary>Fasilitas Rumah</summary><div class="section" id="room-facilities"></div></details>
-            <details open><summary>Fasilitas Perumahan</summary><div class="section" id="residential-facilities"></div></details>
+            <div class="grid3"><label class="field" id="land-area-field">Luas Tanah<input type="number" id="q-landArea"></label><label class="field">Luas Bangunan<input type="number" id="q-buildingArea"></label><label class="field" id="electricity-field">Daya listrik (W)<input type="number" id="q-electricity"></label></div>
+            <label class="field" id="apartment-name-field" style="display:none">Nama Apartemen<input type="text" id="q-apartmentName" placeholder="Pilih dari listing secara eksplisit"></label>
+            <div class="row" id="year-fields" style="display:none"><label class="field">Tahun Dibangun<input type="number" id="q-builtYear" placeholder="Contoh 2021"></label><label class="field">Tahun Direnovasi<input type="number" id="q-renovationYear" placeholder="Contoh 2021"></label></div>
+            <label class="field" id="apartment-extra-fields" style="display:none">Pemandangan<select id="q-scenery"><option value="">(tidak diubah)</option>${CONFIG.sceneries.map(([value, label]) => '<option value="' + value + '">' + label + '</option>').join('')}</select></label>
+            <div class="row" id="land-dimensions" style="display:none"><label class="field">Panjang Tanah (m)<input type="number" step="any" id="q-landLength"></label><label class="field">Lebar Tanah (m)<input type="number" step="any" id="q-landWidth"></label></div>
+            <label class="field" id="complex-name-field" style="display:none">Komplek Perumahan (opsional)<input type="text" id="q-complexName"></label>
+            <div id="commercial-fields" style="display:none">
+              <div class="row"><label class="field">Panjang Bangunan (m)<input type="number" step="any" id="q-buildingLength"></label><label class="field">Lebar Bangunan (m)<input type="number" step="any" id="q-buildingWidth"></label></div>
+            </div>
+            <label class="check" id="imb-field" style="display:none"><input type="checkbox" id="q-imb"> Memiliki IMB</label>
+            <div id="ruko-fields" style="display:none">
+              <label class="field">Nomor Lantai (opsional)<input type="number" id="q-storey"></label>
+              <details open><summary>Fasilitas Ruko</summary><div class="section" id="ruko-facilities"></div></details>
+              <details open><summary>Metode Pembayaran</summary><div class="section" id="ruko-payment-methods"></div></details>
+            </div>
+            <div id="warehouse-fields" style="display:none">
+              <details open><summary>Fasilitas Gudang</summary><div class="section" id="warehouse-facilities"></div></details>
+              <details open><summary>Metode Pembayaran</summary><div class="section" id="warehouse-payment-methods"></div></details>
+            </div>
+            <div id="kost-fields" style="display:none">
+              <details open><summary>Fasilitas Kamar Kost</summary><div class="section" id="kost-room-facilities"></div></details>
+              <details open><summary>Fasilitas Kost</summary><div class="section" id="kost-facilities"></div></details>
+              <details open><summary>Metode Pembayaran</summary><div class="section" id="kost-payment-methods"></div></details>
+            </div>
+            <div class="grid3"><label class="field" id="bedrooms-field"><span id="q-bedroom-label">Kamar Tidur</span><input type="number" id="q-bedrooms"></label><label class="field" id="helper-bedrooms-field">Kamar Tidur Pembantu<input type="number" id="q-helperBedrooms"></label><label class="field" id="bathrooms-field">Kamar Mandi<input type="number" id="q-bathrooms"></label></div>
+            <div class="grid3"><label class="field" id="helper-bathrooms-field">Kamar Mandi Pembantu<input type="number" id="q-helperBathrooms"></label><label class="field" id="floors-field"><span id="q-floor-label">Jumlah Lantai</span><input type="number" id="q-floors"></label><span></span></div>
+            <div class="grid3"><label class="field" id="garage-field">Garasi<input type="number" id="q-garage"></label><label class="field" id="carport-field">Carport<input type="number" id="q-carport"></label><label class="field" id="furnishing-field">Kondisi Perabot<select id="q-furnishing"><option value="">(tidak diubah)</option><option>Furnished</option><option>Semi Furnished</option><option>Unfurnished</option></select></label></div>
+            <label class="field" id="condition-field">Kondisi Properti<select id="q-condition"><option value="">(tidak diubah)</option><option>Bagus</option><option>Butuh Minim Renovasi</option><option>Butuh Renovasi Total</option><option>Terenovasi</option></select></label>
+            <label class="field" id="direction-field">Hadap<select id="q-direction"><option value="">(tidak diubah)</option><option>Selatan</option><option>Barat Daya</option><option>Barat</option><option>Barat Laut</option><option>Utara</option><option>Timur Laut</option><option>Timur</option><option>Tenggara</option></select></label>
+            <div id="house-optional-fields"><label class="field">Lebar Jalan (jumlah mobil)</label><div class="seg" id="road-segments">${CONFIG.roadWidths.map(([value, label]) => '<button type="button" data-road="' + value + '" class="' + ((resolveData().roadWidth || '') === value ? 'active' : '') + '">' + label + '</button>').join('')}</div></div>
+            <label class="field" id="house-water-field">Sumber Air<select id="q-waterSource">${CONFIG.waterSources.map(([value, label]) => '<option value="' + value + '">' + label + '</option>').join('')}</select></label>
+            <div id="house-facility-fields"><details open><summary>Fasilitas Rumah</summary><div class="section" id="room-facilities"></div></details>
+            <details open><summary>Fasilitas Perumahan</summary><div class="section" id="residential-facilities"></div></details></div>
+            <div class="help" id="apartment-manual-fields" style="display:none">Tipe Studio, Mezanin, Fasilitas Apartemen, Peralatan, dan Metode Pembayaran diisi langsung pada form Rumah123.</div>
             <div class="row"><label class="field">Harga<input type="text" inputmode="decimal" id="q-price" placeholder="Contoh: 1,8"></label><label class="field">Satuan harga<select id="q-priceUnit"><option value="">(tidak diubah)</option><option>Ribu</option><option>Juta</option><option>Miliar</option><option>Triliun</option></select></label></div>
+            <label class="field" id="price-type-field" style="display:none">Tipe Harga<select id="q-priceType"><option value="">(tidak diubah)</option><option value="TOTAL">Total</option><option value="PER_SQUAREMETER">/m²</option></select></label>
             <label class="check"><input type="checkbox" id="q-negotiable"> Bisa Nego</label><label class="check"><input type="checkbox" id="q-coBroke"> Co-broke</label>
             <label class="field">Judul iklan<input type="text" id="q-title"></label>
             <label class="field">Deskripsi asli (opsional)</label><textarea class="small" id="original-description" placeholder="Isi deskripsi asli tanpa highlight"></textarea>
@@ -2107,7 +2533,7 @@
     byId('add-usp-description').checked = state.settings.addUSPToDescription;
     byId('original-description').value = state.settings.originalDescription || '';
     const data = resolveData();
-    const fields = ['propertyType', 'listingType', 'propertyStatus', 'locationQuery', 'street', 'certificate', 'landArea', 'buildingArea', 'electricity', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'floors', 'garage', 'carport', 'furnishing', 'condition', 'direction', 'price', 'priceUnit', 'title'];
+    const fields = ['propertyType', 'listingType', 'propertyStatus', 'locationQuery', 'street', 'certificate', 'apartmentName', 'complexName', 'landArea', 'landLength', 'landWidth', 'buildingArea', 'buildingLength', 'buildingWidth', 'storey', 'electricity', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'floors', 'builtYear', 'renovationYear', 'scenery', 'garage', 'carport', 'furnishing', 'condition', 'direction', 'price', 'priceUnit', 'priceType', 'title'];
     fields.forEach((field) => {
       const control = byId('q-' + field);
       if (!control) return;
@@ -2115,6 +2541,7 @@
     });
     byId('q-negotiable').checked = Boolean(data.negotiable);
     byId('q-coBroke').checked = Boolean(data.coBroke);
+    byId('q-imb').checked = data.imb === true;
     byId('q-waterSource').value = data.waterSource || '';
     updateRoadButtons();
   }
@@ -2135,7 +2562,7 @@
       // manually selected highlights belong to the previous property.
       state.manualOverrides = {};
       state.selectedUSPTouched = false;
-      state.selectedUSP = Array.from(new Set(CONFIG.defaults.selectedUSP.concat(state.parsedListing.selectedUSP || [])));
+      state.selectedUSP = Array.from(new Set(defaultUSPsForType(state.parsedListing.propertyType || CONFIG.preset.propertyType).concat(state.parsedListing.selectedUSP || [])));
       state.descriptionHighlights = [];
       state.customHighlights = [];
       state.settings.originalDescription = state.parsedListing.description || '';
@@ -2143,7 +2570,7 @@
       setWarnings([]);
       saveState();
       hydratePanel();
-      const parsedKeys = ['propertyType', 'listingType', 'propertyStatus', 'locationRaw', 'landArea', 'buildingArea', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'electricity', 'waterSourceRaw', 'certificate', 'condition', 'furnishing', 'direction', 'floors', 'roadWidth', 'price', 'priceUnit', 'negotiable', 'description', 'selectedUSP'];
+      const parsedKeys = ['propertyType', 'listingType', 'propertyStatus', 'locationRaw', 'apartmentName', 'complexName', 'landArea', 'landLength', 'landWidth', 'buildingArea', 'buildingLength', 'buildingWidth', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'electricity', 'waterSourceRaw', 'certificate', 'condition', 'furnishing', 'direction', 'floors', 'storey', 'builtYear', 'renovationYear', 'scenery', 'imb', 'rukoFacilities', 'warehouseFacilities', 'kostRoomFacilities', 'kostFacilities', 'paymentMethods', 'roadWidth', 'price', 'priceUnit', 'priceType', 'negotiable', 'description', 'selectedUSP'];
       const found = parsedKeys.filter((key) => {
         const value = state.parsedListing[key];
         if (key === 'negotiable' && state.parsedListing.price == null) return false;
@@ -2168,8 +2595,8 @@
       updatePanel();
       log('Local state dibersihkan. Field listing pada halaman tidak dihapus.');
     });
-    const map = { 'q-propertyType': 'propertyType', 'q-listingType': 'listingType', 'q-propertyStatus': 'propertyStatus', 'q-locationQuery': 'locationQuery', 'q-street': 'street', 'q-certificate': 'certificate', 'q-landArea': 'landArea', 'q-buildingArea': 'buildingArea', 'q-electricity': 'electricity', 'q-bedrooms': 'bedrooms', 'q-helperBedrooms': 'helperBedrooms', 'q-bathrooms': 'bathrooms', 'q-helperBathrooms': 'helperBathrooms', 'q-floors': 'floors', 'q-garage': 'garage', 'q-carport': 'carport', 'q-furnishing': 'furnishing', 'q-condition': 'condition', 'q-direction': 'direction', 'q-price': 'price', 'q-priceUnit': 'priceUnit', 'q-title': 'title' };
-    Object.keys(map).forEach((id) => byId(id).addEventListener(id === 'q-price' ? 'change' : 'input', () => {
+    const map = { 'q-propertyType': 'propertyType', 'q-listingType': 'listingType', 'q-propertyStatus': 'propertyStatus', 'q-locationQuery': 'locationQuery', 'q-street': 'street', 'q-certificate': 'certificate', 'q-apartmentName': 'apartmentName', 'q-complexName': 'complexName', 'q-landArea': 'landArea', 'q-landLength': 'landLength', 'q-landWidth': 'landWidth', 'q-buildingArea': 'buildingArea', 'q-buildingLength': 'buildingLength', 'q-buildingWidth': 'buildingWidth', 'q-storey': 'storey', 'q-electricity': 'electricity', 'q-bedrooms': 'bedrooms', 'q-helperBedrooms': 'helperBedrooms', 'q-bathrooms': 'bathrooms', 'q-helperBathrooms': 'helperBathrooms', 'q-floors': 'floors', 'q-builtYear': 'builtYear', 'q-renovationYear': 'renovationYear', 'q-scenery': 'scenery', 'q-garage': 'garage', 'q-carport': 'carport', 'q-furnishing': 'furnishing', 'q-condition': 'condition', 'q-direction': 'direction', 'q-price': 'price', 'q-priceUnit': 'priceUnit', 'q-priceType': 'priceType', 'q-title': 'title' };
+    Object.keys(map).forEach((id) => byId(id).addEventListener(id === 'q-price' || id === 'q-priceType' || id === 'q-scenery' ? 'change' : 'input', () => {
       const control = byId(id);
       let value = control.value;
       if (map[id] === 'price') {
@@ -2181,12 +2608,17 @@
         control.setCustomValidity('');
         value = parsedPrice == null ? '' : parsedPrice;
         control.value = parsedPrice == null ? '' : formatPriceInput(parsedPrice);
-      } else if (['landArea', 'buildingArea', 'electricity', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'floors', 'garage', 'carport'].includes(map[id]) && value !== '') value = Number(value);
+      } else if (['landArea', 'landLength', 'landWidth', 'buildingArea', 'buildingLength', 'buildingWidth', 'storey', 'electricity', 'bedrooms', 'helperBedrooms', 'bathrooms', 'helperBathrooms', 'floors', 'builtYear', 'renovationYear', 'garage', 'carport'].includes(map[id]) && value !== '') value = Number(value);
       state.manualOverrides[map[id]] = value;
+      if (map[id] === 'propertyType' && !state.selectedUSPTouched) {
+        const propertyType = value || state.parsedListing.propertyType || (state.preset === 'none' ? '' : CONFIG.preset.propertyType);
+        state.selectedUSP = Array.from(new Set(defaultUSPsForType(propertyType).concat(state.parsedListing.selectedUSP || [])));
+      }
       saveState();
       updatePanel();
     }));
     byId('q-waterSource').addEventListener('change', () => { state.manualOverrides.waterSource = byId('q-waterSource').value; saveState(); updatePanel(); });
+    byId('q-imb').addEventListener('change', () => { state.manualOverrides.imb = byId('q-imb').checked; saveState(); updatePanel(); });
     byId('q-negotiable').addEventListener('change', () => { state.manualOverrides.negotiable = byId('q-negotiable').checked; saveState(); updatePanel(); });
     byId('q-coBroke').addEventListener('change', () => { state.manualOverrides.coBroke = byId('q-coBroke').checked; saveState(); updatePanel(); });
     byId('original-description').addEventListener('input', () => { state.settings.originalDescription = byId('original-description').value; saveState(); updatePanel(); });
@@ -2200,8 +2632,28 @@
       updateRoadButtons();
     });
     panel.addEventListener('change', (event) => {
-      const checkbox = event.target.closest('[data-usp],[data-highlight],[data-room-facility],[data-residential-facility]');
+      const checkbox = event.target.closest('[data-usp],[data-highlight],[data-room-facility],[data-residential-facility],[data-ruko-facility],[data-ruko-payment],[data-warehouse-facility],[data-warehouse-payment],[data-kost-room-facility],[data-kost-facility],[data-kost-payment]');
       if (!checkbox) return;
+      if (['data-ruko-facility', 'data-ruko-payment', 'data-warehouse-facility', 'data-warehouse-payment', 'data-kost-room-facility', 'data-kost-facility', 'data-kost-payment'].some((attr) => checkbox.hasAttribute(attr))) {
+        const isWarehouse = checkbox.hasAttribute('data-warehouse-facility') || checkbox.hasAttribute('data-warehouse-payment');
+        const isKost = checkbox.hasAttribute('data-kost-room-facility') || checkbox.hasAttribute('data-kost-facility') || checkbox.hasAttribute('data-kost-payment');
+        const isKostRoomFacility = checkbox.hasAttribute('data-kost-room-facility');
+        const isFacility = checkbox.hasAttribute('data-ruko-facility') || checkbox.hasAttribute('data-warehouse-facility') || checkbox.hasAttribute('data-kost-room-facility') || checkbox.hasAttribute('data-kost-facility');
+        const key = isKost
+          ? (checkbox.hasAttribute('data-kost-payment') ? 'paymentMethods' : isKostRoomFacility ? 'kostRoomFacilities' : 'kostFacilities')
+          : isFacility ? (isWarehouse ? 'warehouseFacilities' : 'rukoFacilities') : 'paymentMethods';
+        const touchedKey = isKost
+          ? (checkbox.hasAttribute('data-kost-payment') ? 'paymentMethodsTouched' : isKostRoomFacility ? 'kostRoomFacilitiesTouched' : 'kostFacilitiesTouched')
+          : isFacility ? (isWarehouse ? 'warehouseFacilitiesTouched' : 'rukoFacilitiesTouched') : 'paymentMethodsTouched';
+        const attr = isKost
+          ? (checkbox.hasAttribute('data-kost-payment') ? 'data-kost-payment' : isKostRoomFacility ? 'data-kost-room-facility' : 'data-kost-facility')
+          : isWarehouse ? (isFacility ? 'data-warehouse-facility' : 'data-warehouse-payment') : (isFacility ? 'data-ruko-facility' : 'data-ruko-payment');
+        state.manualOverrides[key] = Array.from(panel.querySelectorAll('[' + attr + ']:checked')).map((item) => item.getAttribute(attr));
+        state.manualOverrides[touchedKey] = true;
+        saveState();
+        updatePanel();
+        return;
+      }
       if (checkbox.hasAttribute('data-room-facility') || checkbox.hasAttribute('data-residential-facility')) {
         const residential = checkbox.hasAttribute('data-residential-facility');
         const key = residential ? 'residentialFacilities' : 'roomFacilities';
@@ -2260,10 +2712,48 @@
     const byId = (id) => panel.getElementById(id);
     const parsed = state.parsedListing || {};
     const data = resolveData();
-    const keys = [['Tipe', 'propertyType'], ['Iklan', 'listingType'], ['Lokasi', 'locationRaw'], ['LT', 'landArea'], ['LB', 'buildingArea'], ['KT', 'bedrooms'], ['KT pembantu', 'helperBedrooms'], ['KM', 'bathrooms'], ['KM pembantu', 'helperBathrooms'], ['Listrik', 'electricity'], ['Sumber air', 'waterSourceRaw'], ['Sertifikat', 'certificate'], ['Hadap', 'direction'], ['Harga', 'price'], ['Nego', 'negotiable'], ['Co-broke', 'coBroke']];
+    const isLand = normalizeText(data.propertyType) === 'tanah';
+    const isApartment = normalizeText(data.propertyType) === 'apartemen';
+    const isRuko = normalizeText(data.propertyType) === 'ruko';
+    const isWarehouse = normalizeText(data.propertyType) === 'gudang';
+    const isKost = normalizeText(data.propertyType) === 'kost';
+    const isCommercialProperty = isRuko || isWarehouse;
+    byId('land-dimensions').style.display = isLand || isCommercialProperty ? 'grid' : 'none';
+    byId('price-type-field').style.display = isLand || isCommercialProperty ? 'block' : 'none';
+    byId('land-area-field').style.display = isApartment ? 'none' : '';
+    byId('electricity-field').style.display = isKost ? 'none' : '';
+    byId('apartment-name-field').style.display = isApartment ? 'block' : 'none';
+    byId('year-fields').style.display = isApartment || isCommercialProperty || isKost ? 'grid' : 'none';
+    byId('apartment-extra-fields').style.display = isApartment ? 'block' : 'none';
+    byId('apartment-manual-fields').style.display = isApartment ? 'block' : 'none';
+    byId('complex-name-field').style.display = isCommercialProperty || isKost ? 'block' : 'none';
+    byId('commercial-fields').style.display = isCommercialProperty ? 'block' : 'none';
+    byId('imb-field').style.display = isCommercialProperty || isKost ? 'block' : 'none';
+    byId('ruko-fields').style.display = isRuko ? 'block' : 'none';
+    byId('warehouse-fields').style.display = isWarehouse ? 'block' : 'none';
+    byId('kost-fields').style.display = isKost ? 'block' : 'none';
+    byId('bedrooms-field').style.display = isLand || isCommercialProperty ? 'none' : '';
+    byId('helper-bedrooms-field').style.display = isLand || isCommercialProperty || isKost ? 'none' : '';
+    byId('bathrooms-field').style.display = isLand ? 'none' : '';
+    byId('helper-bathrooms-field').style.display = isLand || isCommercialProperty || isKost ? 'none' : '';
+    byId('floors-field').style.display = isLand ? 'none' : '';
+    byId('furnishing-field').style.display = isLand || isRuko || isKost ? 'none' : '';
+    byId('condition-field').style.display = isLand ? 'none' : '';
+    byId('garage-field').style.display = isApartment || isLand || isCommercialProperty || isKost ? 'none' : '';
+    byId('carport-field').style.display = isApartment || isLand || isCommercialProperty ? 'none' : '';
+    byId('direction-field').style.display = isApartment || isCommercialProperty || isKost ? 'none' : '';
+    byId('house-optional-fields').style.display = isApartment || isLand || isWarehouse || isKost ? 'none' : '';
+    byId('house-water-field').style.display = isApartment || isLand || isCommercialProperty || isKost ? 'none' : '';
+    byId('house-facility-fields').style.display = isApartment || isLand || isCommercialProperty || isKost ? 'none' : '';
+    byId('q-floor-label').textContent = isApartment ? 'Nomor Lantai' : 'Jumlah Lantai';
+    byId('q-bedroom-label').textContent = isKost ? 'Jumlah Kamar' : 'Kamar Tidur';
+    const keys = [['Tipe', 'propertyType'], ['Iklan', 'listingType'], ['Lokasi', 'locationRaw'], ['Nama Apartemen', 'apartmentName'], ['Komplek Perumahan', 'complexName'], ['LT', 'landArea'], ['Panjang Tanah', 'landLength'], ['Lebar Tanah', 'landWidth'], ['LB', 'buildingArea'], ['Panjang Bangunan', 'buildingLength'], ['Lebar Bangunan', 'buildingWidth'], [isApartment ? 'Nomor Lantai' : 'Jumlah Lantai', 'floors'], ['Nomor Lantai', 'storey'], ['Tahun Dibangun', 'builtYear'], ['Tahun Direnovasi', 'renovationYear'], ['Pemandangan', 'scenery'], [isKost ? 'Jumlah Kamar' : 'KT', 'bedrooms'], ['KT pembantu', 'helperBedrooms'], ['KM', 'bathrooms'], ['KM pembantu', 'helperBathrooms'], ['Listrik', 'electricity'], ['Sumber air', 'waterSourceRaw'], ['IMB', 'imb'], ['Fasilitas Ruko', 'rukoFacilities'], ['Fasilitas Gudang', 'warehouseFacilities'], ['Fasilitas Kamar Kost', 'kostRoomFacilities'], ['Fasilitas Kost', 'kostFacilities'], ['Metode Pembayaran', 'paymentMethods'], ['Sertifikat', 'certificate'], ['Hadap', 'direction'], ['Harga', 'price'], ['Tipe Harga', 'priceType'], ['Nego', 'negotiable'], ['Co-broke', 'coBroke']];
     const facts = keys.filter(([, key]) => parsed[key] != null && parsed[key] !== '').map(([label, key]) => {
       const displayValue = key === 'price'
         ? formatPriceAmount(parsed[key]) + (parsed.priceUnit ? ' ' + parsed.priceUnit : '')
+        : key === 'priceType' ? (parsed.priceType === 'PER_SQUAREMETER' ? '/m²' : 'Total')
+        : key === 'scenery' ? ((CONFIG.sceneries.find(([value]) => value === parsed.scenery) || [null, parsed.scenery])[1])
+        : Array.isArray(parsed[key]) ? parsed[key].join(', ')
         : parsed[key] === true ? 'Ya' : parsed[key] === false ? 'Tidak' : parsed[key];
       return '<li><b>' + escapeHTML(label) + ':</b> ' + escapeHTML(displayValue) + '</li>';
     });
@@ -2275,6 +2765,18 @@
     byId('room-facilities').innerHTML = roomFacilities.map((name) => '<label class="check"><input type="checkbox" data-room-facility="' + escapeHTML(name) + '" ' + (selectedFacilities.includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
     const selectedResidential = data.residentialFacilities || [];
     byId('residential-facilities').innerHTML = CONFIG.residentialFacilities.map((name) => '<label class="check"><input type="checkbox" data-residential-facility="' + escapeHTML(name) + '" ' + (selectedResidential.includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
+    const selectedRukoFacilities = data.rukoFacilities || [];
+    byId('ruko-facilities').innerHTML = CONFIG.rukoFacilities.map((name) => '<label class="check"><input type="checkbox" data-ruko-facility="' + escapeHTML(name) + '" ' + (selectedRukoFacilities.includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
+    const selectedRukoPayments = data.paymentMethods || [];
+    byId('ruko-payment-methods').innerHTML = CONFIG.rukoPaymentMethods.map((name) => '<label class="check"><input type="checkbox" data-ruko-payment="' + escapeHTML(name) + '" ' + (selectedRukoPayments.includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
+    const selectedWarehouseFacilities = data.warehouseFacilities || [];
+    byId('warehouse-facilities').innerHTML = CONFIG.warehouseFacilities.map((name) => '<label class="check"><input type="checkbox" data-warehouse-facility="' + escapeHTML(name) + '" ' + (selectedWarehouseFacilities.includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
+    byId('warehouse-payment-methods').innerHTML = CONFIG.rukoPaymentMethods.map((name) => '<label class="check"><input type="checkbox" data-warehouse-payment="' + escapeHTML(name) + '" ' + (selectedRukoPayments.includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
+    const selectedKostRoomFacilities = data.kostRoomFacilities || [];
+    byId('kost-room-facilities').innerHTML = CONFIG.kostRoomFacilities.map((name) => '<label class="check"><input type="checkbox" data-kost-room-facility="' + escapeHTML(name) + '" ' + (selectedKostRoomFacilities.includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
+    const selectedKostFacilities = data.kostFacilities || [];
+    byId('kost-facilities').innerHTML = CONFIG.kostFacilities.map((name) => '<label class="check"><input type="checkbox" data-kost-facility="' + escapeHTML(name) + '" ' + (selectedKostFacilities.includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
+    byId('kost-payment-methods').innerHTML = CONFIG.kostPaymentMethods.map((name) => '<label class="check"><input type="checkbox" data-kost-payment="' + escapeHTML(name) + '" ' + ((data.paymentMethods || []).includes(name) ? 'checked' : '') + '> ' + escapeHTML(name) + '</label>').join('');
     const highlights = CONFIG.highlights.map((label) => '<label class="check"><input type="checkbox" data-highlight="' + escapeHTML(label) + '" ' + (state.descriptionHighlights.includes(label) ? 'checked' : '') + '> ' + escapeHTML(label) + '</label>').join('');
     const custom = state.customHighlights.map((label, index) => '<span class="chip">' + escapeHTML(label) + ' <button type="button" data-remove-highlight="' + index + '" aria-label="Hapus highlight">×</button></span>').join('');
     byId('highlights').innerHTML = highlights + '<label class="field">Highlight custom</label><div class="row"><input id="custom-highlight" type="text" placeholder="Contoh: 5 Menit UNDIP"><button class="action secondary" type="button" id="add-custom">+ Tambah</button></div><div class="chips">' + custom + '</div>';
@@ -2282,7 +2784,7 @@
     byId('preview').value = description.value;
     byId('description-warning').innerHTML = description.warning ? '<div class="warning">⚠ ' + escapeHTML(description.warning) + '</div>' : '';
     if (!state.manualOverrides.title) byId('q-title').value = data.title || '';
-    const electricityWarning = data.electricity != null && data.electricity !== '' && ![450, 900, 1300, 2200, 3300, 3500, 4400, 5500, 6600, 7600, 7700, 8000, 9500, 10000, 10500, 10600, 11000, 12700, 13200, 13300, 13900, 16500, 17600, 19000, 22000, 23000, 24000, 30500, 33000, 38100, 41500, 47500, 53000, 61000, 66000, 76000, 82500, 85000, 95000].includes(Number(data.electricity));
+    const electricityWarning = !isKost && data.electricity != null && data.electricity !== '' && ![450, 900, 1300, 2200, 3300, 3500, 4400, 5500, 6600, 7600, 7700, 8000, 9500, 10000, 10500, 10600, 11000, 12700, 13200, 13300, 13900, 16500, 17600, 19000, 22000, 23000, 24000, 30500, 33000, 38100, 41500, 47500, 53000, 61000, 66000, 76000, 82500, 85000, 95000].includes(Number(data.electricity));
     byId('electric-warning').innerHTML = electricityWarning ? '<div class="warning">⚠ Daya listrik ' + escapeHTML(data.electricity) + 'W tidak tersedia sebagai pilihan exact Rumah123.</div>' : '';
     const waterWarn = data.waterSourceRaw && !data.waterSource && !mapWaterSource(data.waterSourceRaw);
     const warningMarkup = [];
